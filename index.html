@@ -298,13 +298,16 @@ function testVoice(lg){if(V.state==="thinking")return;killRec();V.mode="off";sto
    ========================================================= */
 const ERR={bad_pass:"كلمة السر غلط. صححها من الإعدادات.",no_key:"الـrelay ما بي مفتاح API. ضيفه بـScript properties.",bad_key:"مفتاح الـAPI غلط أو منتهي. انسخه من جديد وحطه بـScript properties.",bad_model:"اسم الموديل بخاصية MODEL غلط. امسح الخاصية أو صححها.",
   rate_limited:"Google مشغول أو وصلت الحد اليومي المجاني. جرّب بعد شوية.",refused:"ما گدرت أجاوب على هذا، غيّر الصياغة.",empty:"ما طلع جواب، جرّب مرة ثانية.",
-  network:"ما گدرت أوصل للـrelay. تأكد من الرابط والإنترنت.",no_cfg:"لازم تحط رابط الـrelay وكلمة السر بالإعدادات."};
+  network:"ما گدرت أوصل للـrelay. تأكد من الرابط والإنترنت.",timeout:"Google تأخر كلش ومارد. احچي مرة ثانية.",no_cfg:"لازم تحط رابط الـrelay وكلمة السر بالإعدادات."};
 const errMsg=e=>ERR[e&&e.code]||"صار خلل بالاتصال، جرّب مرة ثانية.";
 async function ask(signal){
   if(!CFG.url||!CFG.pass)throw {code:"no_cfg"};
   let r;
-  try{r=await fetch(CFG.url,{method:"POST",body:JSON.stringify({pass:CFG.pass,system:systemPrompt(),messages:HIST.slice(-30)}),signal});}
-  catch(e){throw {code:e&&e.name==="AbortError"?"cancelled":"network"};}
+  /* never wait forever: give up on one attempt after 70 s */
+  const tc=new AbortController(),tm=setTimeout(()=>tc.abort(),70000),fwd=()=>tc.abort();signal.addEventListener("abort",fwd);
+  try{r=await fetch(CFG.url,{method:"POST",body:JSON.stringify({pass:CFG.pass,system:systemPrompt(),messages:HIST.slice(-30)}),signal:tc.signal});}
+  catch(e){throw {code:signal.aborted?"cancelled":(e&&e.name==="AbortError"?"timeout":"network")};}
+  finally{clearTimeout(tm);signal.removeEventListener("abort",fwd);}
   let d;try{d=await r.json();}catch(e){throw {code:"network"};}
   if(!d.ok)throw {code:d.error};
   return d.text;
@@ -423,8 +426,10 @@ async function voiceSend(text){
   const R=$("#vReply");R.innerHTML="";
   stopSpeak();V.said=0;V.gen=true;V.after=null;
   setVState("thinking");V.ctl=new AbortController();
+  /* the free tier can take 10-30 s when Google is busy: say so instead of looking stuck */
+  const slow=setTimeout(()=>{if(V.state==="thinking"&&V.gen)setVState("thinking",V.lang==="en"?"Still thinking… Google's free servers are slow right now":"بعده يفكر… سيرفرات Google المجانية بطيئة هسه، لحظات");},9000);
   try{
-    const reply=await askRetry(V.ctl.signal);
+    const reply=await askRetry(V.ctl.signal).finally(()=>clearTimeout(slow));
     HIST.push({role:"assistant",content:reply});saveHist();
     R.innerHTML=md(reply);V.ctl=null;
     feed(reply,true);
