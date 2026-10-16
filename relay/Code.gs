@@ -14,7 +14,10 @@
  * After pasting this code, run the function `authorize` once from the editor
  * (choose it next to the Run button) so Google asks for Gmail/Calendar access.
  */
-var RELAY_VERSION = 4;
+var RELAY_VERSION = 5;
+// Shared sheet between Jarvis and the «عقل Hero» galaxy: A1 = map snapshot written by the galaxy,
+// row 3 onward = requests from Jarvis (tasks for agents, notes for the knowledge core) that the galaxy imports.
+var BRIDGE_SHEET_ID = '1p20cItoTYOeQkSy7r2MfPqj3XHhQTIoaJ3HjNN4pVuI';
 // The lite model answers fastest on the free tier; the bigger one is the backup when it is busy.
 var GEMINI_MODELS = ['gemini-flash-lite-latest', 'gemini-flash-latest'];
 var MAX_TOOL_ROUNDS = 6;
@@ -23,6 +26,7 @@ function authorize() {
   GmailApp.getInboxUnreadCount();
   CalendarApp.getDefaultCalendar().getName();
   Maps.newGeocoder();
+  SpreadsheetApp.openById(BRIDGE_SHEET_ID).getName();
   Logger.log('Access granted. Jarvis can use Gmail, Calendar and Maps now.');
 }
 
@@ -73,9 +77,10 @@ function runJarvis_(ctx, system, messages) {
     'Current date and time: ' + now + '.\n' +
     (ctx.place ? 'Hero\'s approximate current location: ' + ctx.place + '. Use it for anything "nearby".\n' : 'Hero\'s location is unknown; ask for the city if a question needs it.\n') +
     'You have tools. Use them instead of saying you cannot do something: web_search for anything live or factual (news, prices, places, delivery, opening hours, weather), ' +
-    (ctx.account ? 'calendar_list / calendar_add for Hero\'s Google Calendar, gmail_search / gmail_read / gmail_draft for Hero\'s Gmail, ' : '') +
+    (ctx.account ? 'calendar_list / calendar_add for Hero\'s Google Calendar, gmail_search / gmail_read / gmail_draft for Hero\'s Gmail, ' +
+      'hero_map to see Hero\'s «عقل Hero» workspace (all agents with their ids, active and due tasks, latest task results), hero_task_add to give one of those agents a task, hero_note_add to save a note into the workspace knowledge core, ' : '') +
     'memory_save when Hero asks you to remember something or shares a lasting fact.\n' +
-    (ctx.account ? 'Before calendar_add or gmail_draft, tell Hero exactly what you will add or write and wait for a clear yes in the conversation; only then call it with confirmed=true. You can never send emails, only drafts that Hero sends from Gmail.\n' :
+    (ctx.account ? 'When Hero mentions an agent, department, task or result in «عقل Hero» (e.g. "the copywriter"), call hero_map first to find the right agent id. Tasks you add appear in the workspace the next time Hero opens it. Before calendar_add, gmail_draft or hero_task_add, tell Hero exactly what you will add or write and wait for a clear yes in the conversation; only then call it with confirmed=true. You can never send emails, only drafts that Hero sends from Gmail.\n' :
       'Gmail and Calendar tools are switched off until Hero sets a passcode of 12+ characters in the relay; say so if asked.\n') +
     'If a tool fails, say so briefly. Keep spoken answers short.\n' +
     (memory ? '\nThings Hero asked you to remember:\n' + memory + '\n' : '');
@@ -125,7 +130,14 @@ function toolDecls_(account) {
     { name: 'gmail_read', description: 'Read the messages of one Gmail thread by thread_id.',
       parameters: { type: 'object', properties: { thread_id: { type: 'string' } }, required: ['thread_id'] } },
     { name: 'gmail_draft', description: 'Create a Gmail draft (never sends). Use reply_thread_id to draft a reply. Only after Hero clearly said yes to the exact text.',
-      parameters: { type: 'object', properties: { to: { type: 'string' }, subject: { type: 'string' }, body: { type: 'string' }, reply_thread_id: { type: 'string' }, confirmed: { type: 'boolean' } }, required: ['body', 'confirmed'] } }
+      parameters: { type: 'object', properties: { to: { type: 'string' }, subject: { type: 'string' }, body: { type: 'string' }, reply_thread_id: { type: 'string' }, confirmed: { type: 'boolean' } }, required: ['body', 'confirmed'] } },
+    { name: 'hero_map', description: 'Read Hero\'s «عقل Hero» workspace: departments and agents (with ids), active and due tasks, and the latest task results.',
+      parameters: { type: 'object', properties: {} } },
+    { name: 'hero_task_add', description: 'Give an agent in «عقل Hero» a task (once or recurring). agent_id must come from hero_map. Only after Hero clearly said yes to the exact task.',
+      parameters: { type: 'object', properties: { agent_id: { type: 'string' }, title: { type: 'string' }, instructions: { type: 'string', description: 'Exactly what the agent should deliver, written like a brief' },
+        freq: { type: 'string', 'enum': ['once', 'daily', 'weekly', 'monthly'] }, confirmed: { type: 'boolean' } }, required: ['agent_id', 'title', 'instructions', 'confirmed'] } },
+    { name: 'hero_note_add', description: 'Save a note into the «عقل Hero» knowledge core (saved notes), which every agent reads.',
+      parameters: { type: 'object', properties: { note: { type: 'string' } }, required: ['note'] } }
   ]);
 }
 
@@ -191,7 +203,36 @@ function runTool_(ctx, name, a) {
     GmailApp.createDraft(String(a.to), String(a.subject || ''), body);
     return { drafted: true, note: 'Draft saved in Gmail Drafts. Hero sends it.' };
   }
+  if (name === 'hero_map') {
+    var snap = bridgeSnapshot_();
+    if (!snap.at) return { error: 'No map yet: Hero needs to open «عقل Hero» once so it can share its map.' };
+    snap.updated = Utilities.formatDate(new Date(snap.at), tz, 'yyyy-MM-dd HH:mm');
+    return snap;
+  }
+  if (name === 'hero_task_add') {
+    if (a.confirmed !== true) return { error: 'Not added: confirm the exact task with Hero first.' };
+    var snap2 = bridgeSnapshot_(), ag = (snap2.agents || []).filter(function (x) { return x.id === String(a.agent_id); })[0];
+    if (!ag) return { error: 'Unknown agent_id. Call hero_map and use one of its agent ids.' };
+    var freq = ['once', 'daily', 'weekly', 'monthly'].indexOf(a.freq) >= 0 ? a.freq : 'once';
+    bridgeAppend_(['task', ag.id, String(a.title || '').slice(0, 80), String(a.instructions || '').slice(0, 3000), freq]);
+    return { queued: true, agent: ag.name, note: 'The task appears in «عقل Hero» the next time Hero opens it.' };
+  }
+  if (name === 'hero_note_add') {
+    bridgeAppend_(['note', '', '', String(a.note || '').slice(0, 3000), '']);
+    return { queued: true, note: 'Saved to the knowledge core the next time Hero opens «عقل Hero».' };
+  }
   return { error: 'unknown tool ' + name };
+}
+
+function bridgeSheet_() { return SpreadsheetApp.openById(BRIDGE_SHEET_ID).getSheets()[0]; }
+function bridgeSnapshot_() {
+  try { return JSON.parse(String(bridgeSheet_().getRange('A1').getValue() || '{}')); } catch (err) { return {}; }
+}
+// Row: id, created, type, agent_id, title, instructions, freq, status, note
+function bridgeAppend_(fields) {
+  var sh = bridgeSheet_();
+  var row = ['j' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), String(Date.now())].concat(fields).concat(['new', '']);
+  sh.getRange(Math.max(4, sh.getLastRow() + 1), 1, 1, row.length).setNumberFormat('@').setValues([row]);
 }
 
 // One Gemini request, falling back to the next model when the free tier is busy.
