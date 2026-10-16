@@ -5,6 +5,12 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#080403">
 <title>JARVIS</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png" type="image/png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="JARVIS">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Reem+Kufi:wght@500;700&family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap">
@@ -38,6 +44,7 @@ button{font-family:inherit}
 .vlive{margin:0;color:var(--dim);font-size:.9rem;min-height:1.4em;max-width:46ch;line-height:1.7}
 .vreply{max-width:56ch;width:100%;text-align:start;line-height:1.8;font-size:.95rem}
 .vreply p{margin:0 0 .5rem}.vreply ul{margin:.25rem 0 .5rem;padding-inline-start:1.2rem}
+.vused{margin:0;color:var(--faint);font-size:.75rem;min-height:1em}
 .tools{display:flex;gap:6px;flex-wrap:wrap;justify-content:center;padding-block:8px;flex:none}
 .ghost{font:500 .75rem var(--f-body);color:var(--dim);background:transparent;border:1px solid var(--line);border-radius:999px;padding:.32rem .72rem;cursor:pointer;white-space:nowrap}
 .toggle{display:flex;align-items:center;gap:6px;font:500 .75rem var(--f-body);color:var(--dim);border:1px solid var(--line);border-radius:999px;padding:.32rem .72rem;cursor:pointer}
@@ -75,6 +82,7 @@ button{font-family:inherit}
     <p class="vstate" id="vState" dir="auto" aria-live="polite"></p>
     <p class="vlive" id="vLive" dir="auto"></p>
     <div class="vreply" id="vReply" dir="auto"></div>
+    <p class="vused" id="vUsed"></p>
   </main>
   <div class="tools">
     <label class="toggle"><input type="checkbox" id="vLoop" checked>محادثة مستمرة</label>
@@ -298,20 +306,30 @@ function testVoice(lg){if(V.state==="thinking")return;killRec();V.mode="off";sto
    ========================================================= */
 const ERR={bad_pass:"كلمة السر غلط. صححها من الإعدادات.",no_key:"الـrelay ما بي مفتاح API. ضيفه بـScript properties.",bad_key:"مفتاح الـAPI غلط أو منتهي. انسخه من جديد وحطه بـScript properties.",bad_model:"اسم الموديل بخاصية MODEL غلط. امسح الخاصية أو صححها.",
   rate_limited:"Google مشغول أو وصلت الحد اليومي المجاني. جرّب بعد شوية.",refused:"ما گدرت أجاوب على هذا، غيّر الصياغة.",empty:"ما طلع جواب، جرّب مرة ثانية.",
-  network:"ما گدرت أوصل للـrelay. تأكد من الرابط والإنترنت.",timeout:"Google تأخر كلش ومارد. احچي مرة ثانية.",no_cfg:"لازم تحط رابط الـrelay وكلمة السر بالإعدادات."};
+  network:"ما گدرت أوصل للـrelay. تأكد من الرابط والإنترنت.",locked:"الـrelay مقفول ساعة بسبب محاولات كلمة سر غلط كثيرة.",timeout:"Google تأخر كلش ومارد. احچي مرة ثانية.",no_cfg:"لازم تحط رابط الـrelay وكلمة السر بالإعدادات."};
 const errMsg=e=>ERR[e&&e.code]||"صار خلل بالاتصال، جرّب مرة ثانية.";
 async function ask(signal){
   if(!CFG.url||!CFG.pass)throw {code:"no_cfg"};
   let r;
   /* never wait forever: give up on one attempt after 70 s */
-  const tc=new AbortController(),tm=setTimeout(()=>tc.abort(),70000),fwd=()=>tc.abort();signal.addEventListener("abort",fwd);
-  try{r=await fetch(CFG.url,{method:"POST",body:JSON.stringify({pass:CFG.pass,system:systemPrompt(),messages:HIST.slice(-30)}),signal:tc.signal});}
+  const tc=new AbortController(),tm=setTimeout(()=>tc.abort(),120000),fwd=()=>tc.abort();signal.addEventListener("abort",fwd);
+  try{r=await fetch(CFG.url,{method:"POST",body:JSON.stringify({pass:CFG.pass,system:systemPrompt(),messages:HIST.slice(-16),location:LOC}),signal:tc.signal});}
   catch(e){throw {code:signal.aborted?"cancelled":(e&&e.name==="AbortError"?"timeout":"network")};}
   finally{clearTimeout(tm);signal.removeEventListener("abort",fwd);}
   let d;try{d=await r.json();}catch(e){throw {code:"network"};}
   if(!d.ok)throw {code:d.error};
+  showUsed(d.used||[]);
   return d.text;
 }
+/* where Hero is (asked once, refreshed every 10 minutes), so "nearby" questions work */
+let LOC=null;
+function watchLocation(){
+  if(!navigator.geolocation)return;
+  const get=()=>navigator.geolocation.getCurrentPosition(p=>{LOC={lat:+p.coords.latitude.toFixed(4),lon:+p.coords.longitude.toFixed(4)};},()=>{},{maximumAge:600000,timeout:15000});
+  get();setInterval(get,600000);
+}
+const TOOL_LABEL={web_search:"🔎 بحث Google",calendar_list:"📅 التقويم",calendar_add:"📅 أضاف للتقويم",gmail_search:"✉️ Gmail",gmail_read:"✉️ قرأ إيميل",gmail_draft:"✉️ كتب مسودة",memory_save:"🧠 حفظ بالذاكرة"};
+function showUsed(used){$("#vUsed").textContent=[...new Set(used)].map(n=>TOOL_LABEL[n]||n).join(" · ");}
 /* the free Gemini tier is sometimes busy for a few seconds: retry twice before giving up */
 async function askRetry(signal){
   for(let i=0;;i++){
@@ -423,7 +441,7 @@ async function voiceSend(text){
   const sw=langSwitch(text);
   if(sw){setLang(sw);say(sw==="en"?"Of course. Let's talk in English.":"تمام، نحچي عربي.",()=>listen());return;}
   HIST.push({role:"user",content:text});
-  const R=$("#vReply");R.innerHTML="";
+  const R=$("#vReply");R.innerHTML="";$("#vUsed").textContent="";
   stopSpeak();V.said=0;V.gen=true;V.after=null;
   setVState("thinking");V.ctl=new AbortController();
   /* the free tier can take 10-30 s when Google is busy: say so instead of looking stuck */
@@ -522,10 +540,11 @@ const lastA=HIST.filter(t=>t.role==="assistant").slice(-1)[0];if(lastA)$("#vRepl
 setVState("idle");
 /* browsers need one tap before the page may speak or listen */
 $("#startBtn").onclick=()=>{
-  $("#startBtn").hidden=true;V.started=true;unlockTTS();pickVoices();
+  $("#startBtn").hidden=true;V.started=true;unlockTTS();pickVoices();watchLocation();
   say(V.lang==="en"?"Good to see you. I'm listening.":"هلا بيك، آني جارفس. أسمعك.",()=>listen());
 };
 if(!CFG.url||!CFG.pass)openSettings();else $("#startBtn").hidden=false;
+if("serviceWorker" in navigator)navigator.serviceWorker.register("sw.js").catch(()=>{});
 </script>
 </body>
 </html>
