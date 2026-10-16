@@ -104,6 +104,7 @@ button{font-family:inherit}
     <label>رابط الـrelay (Web app URL)<input id="sUrl" dir="ltr" placeholder="https://script.google.com/macros/s/…/exec" required></label>
     <label>كلمة السر (PASSCODE)<input id="sPass" dir="ltr" type="password" autocomplete="off" required></label>
     <label>عنك (جارفس يقراها قبل كل جواب)<textarea id="sAbout" dir="auto" placeholder="مثلاً: اسمي حسن، أشتغل سوشيال ميديا وكوبي رايتر وميديا باير بالعراق. البراندات اللي أشتغل عليها…"></textarea></label>
+    <p id="sCore"></p>
     <div class="row"><label>صوت جارفس بالعربي<select id="vSel-ar"></select></label><button class="ghost" type="button" data-test="ar">جرّب</button></div>
     <div class="row"><label>Jarvis's English voice<select id="vSel-en"></select></label><button class="ghost" type="button" data-test="en">Test</button></div>
     <div class="row"><span class="status" id="sStatus"></span><span style="display:flex;gap:8px"><button class="btn" type="button" id="sCheck">افحص الاتصال</button><button class="btn primary" type="submit">حفظ</button></span></div>
@@ -136,6 +137,17 @@ const LS={get(k){try{return localStorage.getItem(k);}catch(e){return null;}},set
 const CFG={url:LS.get("jv-url")||"",pass:LS.get("jv-pass")||"",about:LS.get("jv-about")||""};
 let HIST=[];try{HIST=JSON.parse(LS.get("jv-hist")||"[]").filter(t=>t&&typeof t.content==="string"&&(t.role==="user"||t.role==="assistant"));}catch(e){HIST=[];}
 const saveHist=()=>LS.set("jv-hist",JSON.stringify(HIST.slice(-40)));
+/* knowledge core sent from the «عقل Hero» page: arrives in the link's #core=… part (never sent to a server) */
+let CORE={text:LS.get("jv-core")||"",at:+LS.get("jv-core-at")||0};
+(function takeCore(){
+  const m=location.hash.match(/core=([A-Za-z0-9_-]+)/);if(!m)return;
+  try{
+    const b=atob(m[1].replace(/-/g,"+").replace(/_/g,"/")),u=new Uint8Array(b.length);for(let i=0;i<b.length;i++)u[i]=b.charCodeAt(i);
+    const d=JSON.parse(new TextDecoder().decode(u));
+    if(typeof d.core==="string"){CORE={text:d.core.slice(-12000),at:Date.now()};LS.set("jv-core",CORE.text);LS.set("jv-core-at",String(CORE.at));CORE.fresh=true;}
+  }catch(e){}
+  history.replaceState(null,"",location.pathname+location.search);
+})();
 const V={rec:null,state:"idle",ctl:null,muted:false,spk:0,err:null,unlocked:false,
   lang:LS.get("jv-lang")==="en"?"en":"ar",voices:{ar:null,en:null},warned:{},q:[],said:0,gen:false,talking:false,srAr:"ar-IQ",
   mode:"off",misses:0,wakeFails:0,wakeAt:0,after:null,micBlocked:false,started:false};
@@ -151,7 +163,10 @@ This is a voice conversation: everything you write is read aloud.
 - Short, natural spoken sentences. No markdown, lists, headings, links or emoji. At most 4 sentences unless Hero asks for detail.
 - If an important detail is missing, ask one short question. Never invent facts, numbers or events.
 Notes Hero wrote about themself and their work:
-${CFG.about.trim()||"(none yet)"}`;
+${CFG.about.trim()||"(none yet)"}${CORE.text?`
+
+Hero's knowledge core from the «عقل Hero» workspace (brands, clients, projects, rules, saved notes). Treat it as true background:
+${CORE.text}`:""}`;
 }
 </script>
 <script>
@@ -513,6 +528,7 @@ $("#vNew").onclick=()=>{HIST=[];saveHist();$("#vReply").innerHTML="";$("#vLive")
    ========================================================= */
 function openSettings(){
   $("#sUrl").value=CFG.url;$("#sPass").value=CFG.pass;$("#sAbout").value=CFG.about;$("#sStatus").textContent="";
+  $("#sCore").textContent=CORE.text?"نواة المعرفة من «عقل Hero»: وصلت "+new Date(CORE.at).toLocaleDateString("ar-IQ",{day:"numeric",month:"short",hour:"numeric",minute:"2-digit"})+". تتحدث كل ما تضغط زر JARVIS بالمجرّة.":"نواة المعرفة: بعد ما وصلت. افتح جارفس من زر JARVIS بـ«عقل Hero» حتى يوصله كلشي تعرفه وكلاءك.";
   pickVoices();$("#setPanel").hidden=false;
 }
 $("#setBtn").onclick=openSettings;
@@ -544,6 +560,7 @@ $("#startBtn").onclick=()=>{
   say(V.lang==="en"?"Good to see you. I'm listening.":"هلا بيك، آني جارفس. أسمعك.",()=>listen());
 };
 if(!CFG.url||!CFG.pass)openSettings();else $("#startBtn").hidden=false;
+if(CORE.fresh)setTimeout(()=>toast("وصلت نواة المعرفة من «عقل Hero» ✓"),600);
 if("serviceWorker" in navigator)navigator.serviceWorker.register("sw.js").catch(()=>{});
 </script>
 </body>
